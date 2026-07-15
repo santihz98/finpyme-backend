@@ -28,5 +28,20 @@ services:
       - .:/app
     command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
+  seed:
+    build: .
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ../finpyme-mock-generator/output:/mock-data:ro
+    environment:
+      - MOCK_DATA_PATH=/mock-data
+    command: python scripts/seed.py
+    profiles: ["seed"]
+
 volumes:
   postgres_data:
