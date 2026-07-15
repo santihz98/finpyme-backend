@@ -1,30 +1,25 @@
 from datetime import datetime
+from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
-class Periodo(Base):
-    __tablename__ = "periodos"
+class PeriodoFinanciero(Base):
+    __tablename__ = "periodos_financieros"
     __table_args__ = (
-        Index("ix_periodos_empresa_periodo", "empresa_id", "periodo", unique=True),
+        Index("ix_periodos_financieros_empresa_periodo", "empresa_id", "periodo", unique=True),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    empresa_id: Mapped[int] = mapped_column(ForeignKey("empresas.id"), index=True)
-    # "2025-01"
-    periodo: Mapped[str] = mapped_column(String(7))
-
-    # Denormalized KPIs for fast list reads
-    ingresos_total: Mapped[float] = mapped_column(Numeric(18, 2))
-    gastos_total: Mapped[float] = mapped_column(Numeric(18, 2))
-    utilidad_neta: Mapped[float] = mapped_column(Numeric(18, 2))
-    margen_pct: Mapped[float] = mapped_column(Numeric(6, 2))
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    empresa_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("empresas.id"), index=True)
+    periodo: Mapped[str] = mapped_column(String(7))  # "2025-01"
+    fuente: Mapped[str] = mapped_column(String(20), default="manual")  # manual|csv|api
 
     # Full month detail: ingresos por categoría, composición gastos, anomalía
-    data_json: Mapped[dict] = mapped_column(JSON)
+    datos_json: Mapped[dict] = mapped_column(JSON)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -37,6 +32,6 @@ class Periodo(Base):
     empresa: Mapped["Empresa"] = relationship(  # noqa: F821
         "Empresa", back_populates="periodos"
     )
-    analisis: Mapped[list["Analisis"]] = relationship(  # noqa: F821
-        "Analisis", back_populates="periodo"
+    analisis: Mapped[list["AnalisisIA"]] = relationship(  # noqa: F821
+        "AnalisisIA", back_populates="periodo"
     )

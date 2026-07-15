@@ -1,33 +1,76 @@
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel
 
 
-class PeriodoBase(BaseModel):
+# ── Request ─────────────────────────────────────────────────────────────────
+
+class PeriodoCreate(BaseModel):
     periodo: str  # "2025-01"
-    ingresos_total: float
-    gastos_total: float
-    utilidad_neta: float
-    margen_pct: float
+    datos_json: dict[str, Any]
+    fuente: str = "manual"
 
 
-class PeriodoCreate(PeriodoBase):
-    data_json: dict[str, Any]
+class ImportarMockRequest(BaseModel):
+    meses: list[dict[str, Any]]  # lista de objetos MesData del mock-generator
+    fuente: str = "mock"
 
 
-class PeriodoSummary(PeriodoBase):
-    id: int
+# ── Response: list ───────────────────────────────────────────────────────────
+
+class PeriodoListItem(BaseModel):
+    id: UUID
+    periodo: str
+    fuente: str
+    tiene_analisis: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-class PeriodoResponse(PeriodoBase):
-    id: int
-    empresa_id: int
-    data_json: dict[str, Any]
+# ── Response: detail ─────────────────────────────────────────────────────────
+
+class PeriodoResponse(BaseModel):
+    id: UUID
+    empresa_id: UUID
+    periodo: str
+    fuente: str
+    datos_json: dict[str, Any]
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Response: comparativa ────────────────────────────────────────────────────
+
+class ComparativaResponse(BaseModel):
+    actual: PeriodoResponse
+    anterior: PeriodoResponse | None
+
+
+# ── Response: resumen anual ──────────────────────────────────────────────────
+
+class CategoriaIngresoAnual(BaseModel):
+    categoria: str
+    total: float
+    pct: float  # % del total de ingresos anuales
+
+
+class TendenciaMes(BaseModel):
+    periodo: str
+    ingresos: float
+    gastos: float
+
+
+class ResumenAnual(BaseModel):
+    total_ingresos: float
+    total_gastos: float
+    utilidad_total: float
+    margen_promedio: float
+    mejor_mes: str   # periodo con mayor margen
+    peor_mes: str    # periodo con menor margen
+    categorias_ingreso_top: list[CategoriaIngresoAnual]
+    tendencia_gastos: list[TendenciaMes]  # ordenado cronológicamente ASC

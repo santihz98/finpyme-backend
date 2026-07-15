@@ -1,156 +1,174 @@
 import json
 
 import anthropic
-from fastapi import HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import ValidationError
 
 from app.config import settings
-from app.models.analisis import Analisis
 from app.models.empresa import Empresa
-from app.models.periodo import Periodo
+from app.schemas.analisis import AlertaItem, AnalisisGenerado
 
 
-def _build_prompt(
-    empresa: Empresa,
-    periodo: Periodo,
-    periodo_anterior: Periodo | None,
-) -> str:
-    gastos: dict = periodo.data_json.get("gastos", {})
-    total_gastos = float(gastos.get("total", periodo.gastos_total))
-
-    gastos_lines = "\n".join(
-        f"  · {k.replace('_', ' ').title()}: ${float(v):,.0f} COP"
-        f" ({float(v) / total_gastos * 100:.1f}%)"
-        for k, v in gastos.items()
-        if k != "total" and isinstance(v, (int, float)) and float(v) > 0
-    )
-
-    anomalia = periodo.data_json.get("_anomalia")
-    anomalia_line = (
-        f"\nALERTA: Este mes tuvo una anomalía — {anomalia['descripcion']}"
-        if anomalia
-        else ""
-    )
-
-    if periodo_anterior:
-        def pct_var(a: float, b: float) -> str:
-            return f"{(a - b) / b * 100:+.1f}%" if b else "N/A"
-
-        anterior_section = (
-            f"MES ANTERIOR: {periodo_anterior.periodo}\n"
-            f"- Variación ingresos: {pct_var(float(periodo.ingresos_total), float(periodo_anterior.ingresos_total))}\n"
-            f"- Variación gastos: {pct_var(float(periodo.gastos_total), float(periodo_anterior.gastos_total))}\n"
-            f"- Variación margen: {float(periodo.margen_pct) - float(periodo_anterior.margen_pct):+.1f} pts"
-        )
-    else:
-        anterior_section = "MES ANTERIOR: No disponible"
-
-    return f"""Eres el CFO virtual de {empresa.nombre}, una empresa de {empresa.sector} en {empresa.ciudad}, Colombia.
-Analiza los siguientes datos financieros y responde ÚNICAMENTE con JSON válido.
-
-MES ACTUAL: {periodo.periodo}
-- Ingresos totales: ${float(periodo.ingresos_total):,.0f} COP
-- Gastos totales: ${float(periodo.gastos_total):,.0f} COP
-- Utilidad neta: ${float(periodo.utilidad_neta):,.0f} COP
-- Margen: {float(periodo.margen_pct):.1f}%
-- Composición de gastos:
-{gastos_lines}{anomalia_line}
-
-{anterior_section}
-
-INSTRUCCIONES:
-- Responde SOLO con JSON, sin markdown, sin explicaciones fuera del JSON
-- Usa español colombiano simple, como si hablaras directamente con el dueño
-- Sé específico con números cuando refuerces un punto
-- Estructura exacta requerida:
-{{
-  "resumen": "2-3 oraciones directas sobre el estado del negocio este mes",
-  "alertas": [
-    {{"tipo": "success|warning|danger", "mensaje": "1 oración accionable con número"}}
-  ],
-  "recomendacion_principal": "1 oración con acción concreta que el dueño puede tomar esta semana"
-}}
-- Máximo 3 alertas, mínimo 1
-- El resumen no puede empezar con "Este mes" """
+def _kpis(datos: dict) -> tuple[float, float, float, float]:
+    """Returns (ingresos, gastos, utilidad, margen) from a datos_json dict."""
+    ing = datos.get("ingresos", {})
+    ingresos = float(ing.get("total", 0) if isinstance(ing, dict) else ing)
+    g = datos.get("gastos", {})
+    gastos = float(g.get("total", 0) if isinstance(g, dict) else g)
+    return ingresos, gastos, float(datos.get("utilidad_neta", 0)), float(datos.get("margen_pct", 0))
 
 
-def _fallback(empresa: Empresa, periodo: Periodo) -> dict:
-    margen = float(periodo.margen_pct)
-    tipo = "success" if margen >= 20 else "warning" if margen >= 8 else "danger"
-    return {
-        "resumen": (
-            f"En {periodo.periodo}, {empresa.nombre} registró ingresos de "
-            f"${float(periodo.ingresos_total):,.0f} COP con gastos de "
-            f"${float(periodo.gastos_total):,.0f} COP. "
-            f"La utilidad neta fue de ${float(periodo.utilidad_neta):,.0f} COP "
-            f"con un margen del {margen:.1f}%."
-        ),
-        "alertas": [
-            {
-                "tipo": tipo,
-                "mensaje": (
-                    f"Margen del {margen:.1f}% — "
-                    + (
-                        "resultado saludable; mantén el control de costos."
-                        if margen >= 20
-                        else "por debajo del 20%; revisa la estructura de gastos."
-                        if margen >= 8
-                        else "nivel crítico; reduce costos o incrementa ingresos urgente."
-                    )
-                ),
-            }
-        ],
-        "recomendacion_principal": (
-            "Compara los gastos del mes con el período anterior e identifica "
-            "al menos un rubro donde reducir sin afectar la operación."
-        ),
-    }
+class _ClaudeOutput(AnalisisGenerado):
+    """Internal Pydantic model for validating Claude's raw JSON response."""
+    modelo_usado: str = ""
+    tokens_usados: int = 0
 
 
-async def generar_analisis(
-    empresa: Empresa,
-    periodo: Periodo,
-    periodo_anterior: Periodo | None,
-    db: AsyncSession,
-) -> Analisis:
-    if not settings.ANTHROPIC_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ANTHROPIC_API_KEY no configurada en el servidor",
+class IAService:
+    def __init__(self) -> None:
+        self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self.model = "claude-sonnet-4-6"
+
+    async def generar_analisis(
+        self,
+        empresa: Empresa,
+        mes_actual: dict,
+        mes_anterior: dict | None,
+    ) -> AnalisisGenerado:
+        if not settings.ANTHROPIC_API_KEY:
+            return self._fallback(empresa, mes_actual)
+
+        prompt = self._construir_prompt(empresa, mes_actual, mes_anterior)
+
+        response = await self.client.messages.create(
+            model=self.model,
+            max_tokens=600,
+            temperature=0.3,
+            messages=[{"role": "user", "content": prompt}],
         )
 
-    prompt = _build_prompt(empresa, periodo, periodo_anterior)
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        raw = response.content[0].text if response.content else ""
+        tokens = (
+            response.usage.input_tokens + response.usage.output_tokens
+            if response.usage
+            else 0
+        )
+        parsed = self._parsear_respuesta(raw, empresa, mes_actual)
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=600,
-        temperature=0.3,
-        messages=[{"role": "user", "content": prompt}],
-    )
+        return AnalisisGenerado(
+            resumen=parsed["resumen"],
+            alertas=parsed["alertas"],
+            recomendacion_principal=parsed["recomendacion_principal"],
+            modelo_usado=self.model,
+            tokens_usados=tokens,
+        )
 
-    raw = message.content[0].text if message.content else ""
-    cleaned = raw.replace("```json", "").replace("```", "").strip()
+    def _construir_prompt(
+        self,
+        empresa: Empresa,
+        mes_actual: dict,
+        mes_anterior: dict | None,
+    ) -> str:
+        periodo_str: str = mes_actual.get("periodo", "")
+        ingresos, gastos_total, utilidad, margen = _kpis(mes_actual)
 
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        parsed = _fallback(empresa, periodo)
+        gastos_dict: dict = mes_actual.get("gastos", {})
+        gastos_lines = "\n".join(
+            f"  · {k.replace('_', ' ').title()}: ${float(v):,.0f} COP"
+            f" ({float(v) / gastos_total * 100:.1f}%)"
+            for k, v in gastos_dict.items()
+            if k != "total" and isinstance(v, (int, float)) and float(v) > 0
+        ) if gastos_total else "  · Sin detalle de gastos"
 
-    analisis = Analisis(
-        empresa_id=empresa.id,
-        periodo_id=periodo.id,
-        resumen=parsed["resumen"],
-        alertas=parsed.get("alertas", []),
-        recomendacion=parsed.get("recomendacion_principal", ""),
-        modelo="claude-sonnet-4-6",
-        tokens_usados=(
-            message.usage.input_tokens + message.usage.output_tokens
-            if message.usage
-            else None
-        ),
-    )
-    db.add(analisis)
-    await db.commit()
-    await db.refresh(analisis)
-    return analisis
+        anomalia = mes_actual.get("_anomalia")
+        anomalia_line = (
+            f"\nALERTA: Anomalía detectada — {anomalia['descripcion']}"
+            if anomalia
+            else ""
+        )
+
+        if mes_anterior:
+            pi, pg, _, pm = _kpis(mes_anterior)
+
+            def pct_var(a: float, b: float) -> str:
+                return f"{(a - b) / b * 100:+.1f}%" if b else "N/A"
+
+            anterior_section = (
+                f"MES ANTERIOR: {mes_anterior.get('periodo', '')}\n"
+                f"- Variación ingresos: {pct_var(ingresos, pi)}\n"
+                f"- Variación gastos: {pct_var(gastos_total, pg)}\n"
+                f"- Variación margen: {margen - pm:+.1f} pts"
+            )
+        else:
+            anterior_section = "MES ANTERIOR: No disponible"
+
+        return (
+            f"Eres el CFO virtual de {empresa.nombre}, una empresa de "
+            f"{empresa.sector} en {empresa.ciudad}, Colombia.\n"
+            "Analiza los siguientes datos financieros y responde ÚNICAMENTE con JSON válido.\n\n"
+            f"MES ACTUAL: {periodo_str}\n"
+            f"- Ingresos totales: ${ingresos:,.0f} COP\n"
+            f"- Gastos totales: ${gastos_total:,.0f} COP\n"
+            f"- Utilidad neta: ${utilidad:,.0f} COP\n"
+            f"- Margen: {margen:.1f}%\n"
+            f"- Composición de gastos:\n{gastos_lines}{anomalia_line}\n\n"
+            f"{anterior_section}\n\n"
+            "INSTRUCCIONES:\n"
+            "- Responde SOLO con JSON, sin markdown, sin explicaciones fuera del JSON\n"
+            "- Usa español colombiano simple, como si hablaras directamente con el dueño\n"
+            "- Sé específico con números cuando refuerces un punto\n"
+            "- Estructura exacta requerida:\n"
+            "{\n"
+            '  "resumen": "2-3 oraciones directas sobre el estado del negocio este mes",\n'
+            '  "alertas": [\n'
+            '    {"tipo": "success|warning|danger", "mensaje": "1 oración accionable con número"}\n'
+            "  ],\n"
+            '  "recomendacion_principal": "1 oración con acción concreta que el dueño puede tomar esta semana"\n'
+            "}\n"
+            "- Máximo 3 alertas, mínimo 1\n"
+            "- El resumen no puede empezar con \"Este mes\""
+        )
+
+    def _parsear_respuesta(
+        self, raw: str, empresa: Empresa, mes_actual: dict
+    ) -> dict:
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        try:
+            data = json.loads(cleaned)
+            validated = _ClaudeOutput(**data)
+            return validated.model_dump()
+        except (json.JSONDecodeError, ValidationError, KeyError):
+            return self._fallback(empresa, mes_actual)
+
+    def _fallback(self, empresa: Empresa, mes_actual: dict) -> dict:
+        ingresos, gastos, utilidad, margen = _kpis(mes_actual)
+        tipo: str = "success" if margen >= 20 else "warning" if margen >= 8 else "danger"
+        return {
+            "resumen": (
+                f"En {mes_actual.get('periodo', 'el período')}, {empresa.nombre} registró "
+                f"ingresos de ${ingresos:,.0f} COP con gastos de ${gastos:,.0f} COP. "
+                f"La utilidad neta fue de ${utilidad:,.0f} COP con un margen del {margen:.1f}%."
+            ),
+            "alertas": [
+                {
+                    "tipo": tipo,
+                    "mensaje": (
+                        f"Margen del {margen:.1f}% — "
+                        + (
+                            "resultado saludable; mantén el control de costos."
+                            if margen >= 20
+                            else "por debajo del 20%; revisa la estructura de gastos."
+                            if margen >= 8
+                            else "nivel crítico; reduce costos o incrementa ingresos urgente."
+                        )
+                    ),
+                }
+            ],
+            "recomendacion_principal": (
+                "Compara los gastos del mes con el período anterior e identifica "
+                "al menos un rubro donde reducir sin afectar la operación."
+            ),
+        }
+
+
+# Module-level singleton — AsyncAnthropic client is coroutine-safe
+ia_service = IAService()

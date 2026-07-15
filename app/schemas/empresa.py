@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -11,8 +12,9 @@ class EmpresaBase(BaseModel):
 
 
 class EmpresaResponse(EmpresaBase):
-    id: int
-    activa: bool
+    id: UUID
+    plan: str
+    activo: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Import Base + all models so Alembic detects table changes
 from app.database import Base
-from app.models import Analisis, Empresa, Periodo, Usuario  # noqa: F401
+from app.models import AnalisisIA, Empresa, PeriodoFinanciero, Usuario  # noqa: F401
 from app.config import settings
 
 config = context.config
