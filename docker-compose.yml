@@ -40,7 +40,7 @@ services:
       - ../finpyme-mock-generator/output:/mock-data:ro
     environment:
       - MOCK_DATA_PATH=/mock-data
-    command: python scripts/seed.py
+    command: sh -c "alembic upgrade head && python scripts/seed.py"
     profiles: ["seed"]
 
 volumes:

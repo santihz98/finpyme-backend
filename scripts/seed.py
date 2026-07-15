@@ -78,7 +78,11 @@ SEED_DATA = [
 
 
 async def _delete_empresa(session: AsyncSession, nit: str) -> None:
-    result = await session.execute(select(Empresa).where(Empresa.nit == nit))
+    try:
+        result = await session.execute(select(Empresa).where(Empresa.nit == nit))
+    except Exception:
+        await session.rollback()
+        return  # tables don't exist yet — first run after migration
     empresa = result.scalar_one_or_none()
     if empresa is None:
         return
