@@ -93,6 +93,19 @@ async def _delete_empresa(session: AsyncSession, nit: str) -> None:
     await session.execute(delete(Empresa).where(Empresa.id == empresa.id))
 
 
+async def re_hash_passwords(factory) -> None:
+    """Re-hash demo user passwords using the current hash_password (with 72-byte truncation)."""
+    demo_passwords = {entry["usuario"]["email"]: entry["usuario"]["password"] for entry in SEED_DATA}
+    async with factory() as session:
+        result = await session.execute(select(Usuario).where(Usuario.email.in_(demo_passwords)))
+        usuarios = result.scalars().all()
+        for usuario in usuarios:
+            plain = demo_passwords[usuario.email]
+            usuario.password_hash = hash_password(plain)
+        await session.commit()
+    print(f"  Passwords re-hasheados: {len(usuarios)} usuarios.")
+
+
 async def seed() -> None:
     engine = create_async_engine(settings.DATABASE_URL, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -150,6 +163,7 @@ async def seed() -> None:
 
         await session.commit()
 
+    await re_hash_passwords(factory)
     await engine.dispose()
 
     col = (32, 26, 12, 9)
