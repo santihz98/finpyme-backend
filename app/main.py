@@ -16,10 +16,16 @@ app = FastAPI(
 # ── Middleware (order matters: CORS first, then tenant) ──
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origins=[
+        "https://finpyme-dashboard.vercel.app",
+        "https://finpyme-dashboard-*.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 app.add_middleware(TenantMiddleware)
 
