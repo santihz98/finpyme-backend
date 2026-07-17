@@ -20,6 +20,20 @@ class ImportarMockRequest(BaseModel):
 
 # ── Response: list ───────────────────────────────────────────────────────────
 
+class PeriodoResumen(BaseModel):
+    id: UUID
+    periodo: str
+    fuente: str
+    tiene_analisis: bool
+    ingresos_total: float
+    gastos_total: float
+    utilidad_neta: float
+    margen_pct: float
+    tiene_anomalia: bool
+    descripcion_anomalia: str | None
+    created_at: datetime
+
+
 class PeriodoListItem(BaseModel):
     id: UUID
     periodo: str

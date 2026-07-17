@@ -12,6 +12,7 @@ from app.schemas.periodo import (
     ImportarMockRequest,
     PeriodoCreate,
     PeriodoListItem,
+    PeriodoResumen,
     ResumenAnual,
     TendenciaMes,
 )
@@ -34,7 +35,7 @@ def _kpis(datos: dict) -> tuple[float, float, float, float]:
 
 async def get_periodos_list(
     empresa_id: UUID, db: AsyncSession
-) -> list[PeriodoListItem]:
+) -> list[PeriodoResumen]:
     analisis_exists = (
         exists(select(AnalisisIA.id).where(AnalisisIA.periodo_id == PeriodoFinanciero.id))
         .correlate(PeriodoFinanciero)
@@ -45,16 +46,27 @@ async def get_periodos_list(
         .order_by(desc(PeriodoFinanciero.periodo))
     )
     rows = (await db.execute(stmt)).all()
-    return [
-        PeriodoListItem(
-            id=row[0].id,
-            periodo=row[0].periodo,
-            fuente=row[0].fuente,
-            tiene_analisis=bool(row[1]),
-            created_at=row[0].created_at,
+    result = []
+    for row in rows:
+        p = row[0]
+        ing, gas, util, margen = _kpis(p.datos_json)
+        anomalia = p.datos_json.get("_anomalia")
+        result.append(
+            PeriodoResumen(
+                id=p.id,
+                periodo=p.periodo,
+                fuente=p.fuente,
+                tiene_analisis=bool(row[1]),
+                ingresos_total=round(ing, 2),
+                gastos_total=round(gas, 2),
+                utilidad_neta=round(util, 2),
+                margen_pct=round(margen, 2),
+                tiene_anomalia=anomalia is not None,
+                descripcion_anomalia=anomalia.get("descripcion") if anomalia else None,
+                created_at=p.created_at,
+            )
         )
-        for row in rows
-    ]
+    return result
 
 
 # ── Single fetch ─────────────────────────────────────────────────────────────
