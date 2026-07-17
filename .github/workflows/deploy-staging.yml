@@ -1,0 +1,16 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches: [staging]
+
+jobs:
+  notify:
+    name: Staging Deploy Triggered
+    runs-on: ubuntu-latest
+    steps:
+      - name: Railway auto-deploy triggered
+        run: |
+          echo "✅ Push to staging detected"
+          echo "Railway will auto-deploy from GitHub integration"
+          echo "Check deployment status at railway.app"
