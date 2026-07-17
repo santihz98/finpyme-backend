@@ -12,6 +12,7 @@ from app.schemas.periodo import (
     ImportarMockRequest,
     PeriodoCreate,
     PeriodoListItem,
+    PeriodoResumen,
     PeriodoResponse,
     ResumenAnual,
 )
@@ -33,11 +34,11 @@ def _require_owner_or_admin(current_user: Usuario) -> None:
 # Important: static sub-paths (/resumen/anual, /importar-mock) MUST be
 # registered before /{periodo} so FastAPI doesn't swallow them as path params.
 
-@router.get("/", response_model=list[PeriodoListItem])
+@router.get("/", response_model=list[PeriodoResumen])
 async def list_periodos(
     empresa: Empresa = Depends(get_current_empresa),
     db: AsyncSession = Depends(get_db),
-) -> list[PeriodoListItem]:
+) -> list[PeriodoResumen]:
     return await periodo_service.get_periodos_list(empresa.id, db)
 
 
