@@ -5,15 +5,12 @@ on:
     branches: [staging]
 
 jobs:
-  deploy:
-    name: Deploy to Railway Staging
+  notify:
+    name: Staging Deploy Triggered
     runs-on: ubuntu-latest
-    environment: staging
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-      - name: Deploy to Staging
-        run: railway up --service finpyme-backend --environment staging
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Railway auto-deploy triggered
+        run: |
+          echo "✅ Push to staging detected"
+          echo "Railway will auto-deploy from GitHub integration"
+          echo "Check deployment status at railway.app"
