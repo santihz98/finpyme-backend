@@ -1,7 +1,9 @@
 import io
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,10 @@ from app.services.reporte_service import ReporteService
 router = APIRouter(prefix="/reportes", tags=["reportes"])
 reporte_service = ReporteService()
 email_service = EmailService()
+
+
+class ComparativoRequest(BaseModel):
+    periodos: List[str]  # max 3, ej: ["2025-01", "2025-06", "2025-10"]
 
 
 async def _construir_datos_reporte(
@@ -176,4 +182,62 @@ async def enviar_reporte_email(
         "enviado": enviado,
         "email": usuario.email,
         "periodo": periodo,
+    }
+
+
+@router.post("/comparativo")
+async def generar_comparativo(
+    request: ComparativoRequest,
+    current_empresa: Empresa = Depends(get_current_empresa),
+    db: AsyncSession = Depends(get_db),
+):
+    if len(request.periodos) > 3:
+        raise HTTPException(400, "Máximo 3 períodos para comparar")
+    if len(request.periodos) < 2:
+        raise HTTPException(400, "Mínimo 2 períodos para comparar")
+
+    resultados = []
+    for periodo in request.periodos:
+        result = await db.execute(
+            select(PeriodoFinanciero).where(
+                PeriodoFinanciero.empresa_id == current_empresa.id,
+                PeriodoFinanciero.periodo == periodo,
+            )
+        )
+        mes = result.scalar_one_or_none()
+        if not mes:
+            raise HTTPException(404, f"Periodo {periodo} no encontrado")
+
+        datos = mes.datos_json
+        ingresos = datos.get("ingresos", {})
+        gastos_dict = datos.get("gastos", {})
+        categorias = [
+            {
+                "nombre": c["nombre"],
+                "valor": c["valor"],
+                "pct": round(c["valor"] / ingresos.get("total", 1) * 100, 1),
+            }
+            for c in ingresos.get("categorias", [])
+        ]
+
+        resultados.append({
+            "periodo": periodo,
+            "ingresos_total": ingresos.get("total", 0),
+            "gastos_total": gastos_dict.get("total", 0),
+            "utilidad_neta": datos.get("utilidad_neta", 0),
+            "margen_pct": datos.get("margen_pct", 0),
+            "tiene_anomalia": "_anomalia" in datos and datos["_anomalia"] is not None,
+            "gastos_detalle": {
+                "nomina": gastos_dict.get("nomina", 0),
+                "proveedores": gastos_dict.get("proveedores", 0),
+                "arriendo": gastos_dict.get("arriendo", 0),
+                "servicios": gastos_dict.get("servicios", 0),
+                "otros": gastos_dict.get("otros", 0),
+            },
+            "categorias_ingreso": categorias,
+        })
+
+    return {
+        "empresa": current_empresa.nombre,
+        "periodos": resultados,
     }
