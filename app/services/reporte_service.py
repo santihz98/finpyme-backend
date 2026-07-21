@@ -30,11 +30,15 @@ class ReporteService:
         mes_anterior: dict | None,
         analisis: dict | None,
         periodos_resumen: list,
+        grafica_barras: str | None = None,
+        grafica_donut: str | None = None,
     ) -> bytes:
         datos = mes_data.get("datos_json", mes_data)
 
-        grafica_barras = self._generar_grafica_barras(periodos_resumen)
-        grafica_donut = self._generar_grafica_donut(datos.get("gastos", {}))
+        if grafica_barras is None:
+            grafica_barras = self._generar_grafica_barras(periodos_resumen)
+        if grafica_donut is None:
+            grafica_donut = self._generar_grafica_donut(datos.get("gastos", {}))
 
         html_content = self._renderizar_html(
             empresa, mes_data, mes_anterior, analisis,
