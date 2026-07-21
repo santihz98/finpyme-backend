@@ -29,19 +29,16 @@ class ReporteService:
         mes_data: dict,
         mes_anterior: dict | None,
         analisis: dict | None,
+        periodos_resumen: list,
     ) -> bytes:
         datos = mes_data.get("datos_json", mes_data)
 
-        grafica_barras = self._generar_grafica_barras(
-            empresa.get("tendencia", [])
-        )
-        grafica_donut = self._generar_grafica_donut(
-            datos.get("gastos", {})
-        )
+        grafica_barras = self._generar_grafica_barras(periodos_resumen)
+        grafica_donut = self._generar_grafica_donut(datos.get("gastos", {}))
 
         html_content = self._renderizar_html(
             empresa, mes_data, mes_anterior, analisis,
-            grafica_barras, grafica_donut,
+            periodos_resumen, grafica_barras, grafica_donut,
         )
 
         pdf = HTML(string=html_content).write_pdf()
@@ -145,44 +142,48 @@ class ReporteService:
         mes_data: dict,
         mes_anterior: dict | None,
         analisis: dict | None,
+        periodos_resumen: list,
         grafica_barras: str,
         grafica_donut: str,
     ) -> str:
-        datos = mes_data.get("datos_json", mes_data)
-        ingresos = datos.get("ingresos", {})
-        gastos = datos.get("gastos", {})
-        utilidad = datos.get("utilidad_neta", 0)
-        margen = datos.get("margen_pct", 0)
+        datos_json = mes_data.get("datos_json", {})
+        ingresos = datos_json.get("ingresos", {})
+        gastos = datos_json.get("gastos", {})
 
-        var_ingresos = var_margen = None
+        delta_ingresos = None
         if mes_anterior:
-            datos_ant = mes_anterior.get("datos_json", mes_anterior)
-            ing_ant = datos_ant.get("ingresos", {})
-            ing_ant_total = ing_ant.get("total", 0) if isinstance(ing_ant, dict) else ing_ant
-            ing_actual = ingresos.get("total", 0) if isinstance(ingresos, dict) else ingresos
-            if ing_ant_total:
-                var_ingresos = round((ing_actual - ing_ant_total) / ing_ant_total * 100, 1)
-            mar_ant = datos_ant.get("margen_pct", 0)
-            var_margen = round(margen - mar_ant, 1)
+            anterior_json = mes_anterior.get("datos_json", {})
+            ant_ingresos = anterior_json.get("ingresos", {}).get("total", 0)
+            if ant_ingresos > 0:
+                delta_ingresos = (
+                    (ingresos.get("total", 0) - ant_ingresos) / ant_ingresos * 100
+                )
+
+        total_ingresos = ingresos.get("total", 0)
+        categorias = [
+            {
+                "nombre": cat["nombre"],
+                "valor_fmt": self._formatear_cop(cat["valor"]),
+                "pct": round(cat["valor"] / total_ingresos * 100, 1) if total_ingresos else 0,
+            }
+            for cat in ingresos.get("categorias", [])
+        ]
 
         env = Environment(loader=BaseLoader())
-        tpl = env.from_string(_HTML_TEMPLATE)
-        return tpl.render(
+        template = env.from_string(REPORTE_HTML_TEMPLATE)
+        return template.render(
             empresa=empresa,
-            periodo=mes_data.get("periodo", ""),
-            ingresos_total=ingresos.get("total", 0) if isinstance(ingresos, dict) else ingresos,
-            gastos_total=gastos.get("total", 0) if isinstance(gastos, dict) else gastos,
-            utilidad=utilidad,
-            margen=margen,
-            var_ingresos=var_ingresos,
-            var_margen=var_margen,
-            categorias=ingresos.get("categorias", []) if isinstance(ingresos, dict) else [],
-            analisis=analisis,
-            anomalia=datos.get("_anomalia"),
+            periodo_label=self._nombre_mes_completo(mes_data["periodo"]),
+            ingresos_fmt=self._formatear_cop(total_ingresos),
+            gastos_fmt=self._formatear_cop(gastos.get("total", 0)),
+            utilidad_fmt=self._formatear_cop(datos_json.get("utilidad_neta", 0)),
+            margen=round(datos_json.get("margen_pct", 0), 1),
+            delta_ingresos=delta_ingresos,
             grafica_barras=grafica_barras,
             grafica_donut=grafica_donut,
-            fmt=self._formatear_cop,
-            generado_en=datetime.now().strftime("%d/%m/%Y %H:%M"),
+            categorias=categorias,
+            analisis=analisis,
+            fecha_generacion=datetime.now().strftime("%d/%m/%Y %H:%M"),
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -195,135 +196,231 @@ class ReporteService:
 
 # ── Template HTML ─────────────────────────────────────────────────────────────
 
-_HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="es">
+REPORTE_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="UTF-8"/>
+<meta charset="UTF-8">
 <style>
-  @page { size: A4; margin: 20mm 15mm; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Helvetica Neue', Arial, sans-serif;
-         background: #0F1923; color: #E8EDF2; font-size: 11px; }
-  .header { background: #1A2A3A; padding: 16px 20px;
-            border-bottom: 3px solid #00C896; margin-bottom: 16px; }
-  .header h1 { font-size: 18px; color: #00C896; }
-  .header .sub { color: #6B7A8D; font-size: 11px; margin-top: 4px; }
-  .kpis { display: flex; gap: 10px; margin-bottom: 16px; }
-  .kpi { flex: 1; background: #1A2A3A; border-radius: 8px;
-         padding: 12px; border-left: 3px solid #00C896; }
-  .kpi.rojo { border-left-color: #FF5C5C; }
-  .kpi .label { color: #6B7A8D; font-size: 9px; text-transform: uppercase;
-                letter-spacing: .5px; }
-  .kpi .valor { font-size: 20px; font-weight: 700; color: #E8EDF2;
-                margin: 4px 0 2px; }
-  .kpi .var { font-size: 9px; }
-  .var-pos { color: #00C896; } .var-neg { color: #FF5C5C; }
-  .seccion { background: #1A2A3A; border-radius: 8px;
-             padding: 12px 14px; margin-bottom: 12px; }
-  .seccion h2 { font-size: 12px; color: #00C896; margin-bottom: 10px;
-                border-bottom: 1px solid #0F1923; padding-bottom: 6px; }
-  .graficas { display: flex; gap: 10px; margin-bottom: 12px; }
-  .graficas .g-barras { flex: 2; }
-  .graficas .g-donut  { flex: 1; }
-  .graficas img { width: 100%; border-radius: 6px; }
-  table { width: 100%; border-collapse: collapse; font-size: 10px; }
-  th { color: #6B7A8D; text-align: left; padding: 4px 6px;
-       border-bottom: 1px solid #0F1923; }
-  td { padding: 5px 6px; border-bottom: 1px solid #0F1923; }
-  .tag-anomalia { background: #F4B942; color: #0F1923; border-radius: 4px;
-                  padding: 2px 6px; font-size: 9px; font-weight: 700; }
-  .analisis-bloque { background: #0F1923; border-radius: 6px;
-                     padding: 10px 12px; font-size: 10px;
-                     line-height: 1.5; color: #E8EDF2; }
-  .footer { text-align: center; color: #6B7A8D; font-size: 8px;
-            margin-top: 10px; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, Arial, sans-serif;
+    background: #0F1923;
+    color: #E8EDF2;
+    padding: 32px;
+    font-size: 13px;
+  }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #243447;
+  }
+  .logo { font-size: 22px; font-weight: 700; }
+  .logo span { color: #00C896; }
+  .empresa-info { text-align: right; }
+  .empresa-nombre { font-size: 15px; font-weight: 600; }
+  .empresa-meta { font-size: 11px; color: #6B7A8D; margin-top: 3px; }
+  .periodo-badge {
+    display: inline-block;
+    background: #1A2A3A;
+    border: 1px solid #243447;
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: #00C896;
+    margin-top: 6px;
+  }
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .kpi-card {
+    background: #1A2A3A;
+    border: 1px solid #243447;
+    border-radius: 10px;
+    padding: 14px;
+    border-left: 3px solid #243447;
+  }
+  .kpi-card.emerald { border-left-color: #00C896; }
+  .kpi-card.coral   { border-left-color: #FF5C5C; }
+  .kpi-card.amber   { border-left-color: #F4B942; }
+  .kpi-label { font-size: 10px; color: #6B7A8D; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .kpi-valor { font-size: 20px; font-weight: 700; }
+  .kpi-delta { font-size: 10px; margin-top: 4px; }
+  .emerald { color: #00C896; }
+  .coral   { color: #FF5C5C; }
+  .amber   { color: #F4B942; }
+  .section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6B7A8D;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 12px;
+  }
+  .charts-row {
+    display: grid;
+    grid-template-columns: 3fr 2fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .chart-card {
+    background: #1A2A3A;
+    border: 1px solid #243447;
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .chart-card img { width: 100%; height: auto; }
+  .table-card {
+    background: #1A2A3A;
+    border: 1px solid #243447;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 24px;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    font-size: 10px; color: #6B7A8D; text-transform: uppercase;
+    text-align: left; padding: 6px 8px;
+    border-bottom: 1px solid #243447;
+  }
+  td {
+    font-size: 12px; padding: 8px 8px;
+    border-bottom: 1px solid #1A2A3A;
+  }
+  .ai-card {
+    background: #1A2A3A;
+    border: 1px solid #243447;
+    border-left: 3px solid #00C896;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 24px;
+  }
+  .ai-resumen { font-size: 12px; line-height: 1.6; color: #E8EDF2; margin-bottom: 12px; }
+  .alerta {
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+  .alerta.success { background: rgba(0,200,150,0.1);  color: #00C896; }
+  .alerta.warning { background: rgba(244,185,66,0.1); color: #F4B942; }
+  .alerta.danger  { background: rgba(255,92,92,0.1);  color: #FF5C5C; }
+  .recomendacion {
+    background: rgba(244,185,66,0.08);
+    border: 1px solid rgba(244,185,66,0.2);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 11px;
+    color: #F4B942;
+    margin-top: 10px;
+  }
+  .footer {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid #243447;
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #6B7A8D;
+  }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>{{ empresa.nombre }}</h1>
-  <div class="sub">Reporte financiero · {{ periodo }} · NIT {{ empresa.nit }}</div>
+  <div>
+    <div class="logo">Fin<span>Pyme</span></div>
+    <div style="font-size:10px; color:#6B7A8D; margin-top:3px;">Reporte financiero ejecutivo</div>
+  </div>
+  <div class="empresa-info">
+    <div class="empresa-nombre">{{ empresa.nombre }}</div>
+    <div class="empresa-meta">NIT {{ empresa.nit }} · {{ empresa.ciudad }}</div>
+    <div class="periodo-badge">{{ periodo_label }}</div>
+  </div>
 </div>
 
-<div class="kpis">
-  <div class="kpi">
-    <div class="label">Ingresos</div>
-    <div class="valor">{{ fmt(ingresos_total) }}</div>
-    {% if var_ingresos is not none %}
-    <div class="var {% if var_ingresos >= 0 %}var-pos{% else %}var-neg{% endif %}">
-      {{ '+' if var_ingresos >= 0 }}{{ var_ingresos }}% vs mes anterior
+<div class="kpi-grid">
+  <div class="kpi-card emerald">
+    <div class="kpi-label">Ingresos</div>
+    <div class="kpi-valor emerald">{{ ingresos_fmt }}</div>
+    {% if delta_ingresos %}
+    <div class="kpi-delta {{ 'emerald' if delta_ingresos > 0 else 'coral' }}">
+      {{ '↑' if delta_ingresos > 0 else '↓' }} {{ delta_ingresos|abs|round(1) }}% vs mes anterior
     </div>
     {% endif %}
   </div>
-  <div class="kpi {% if utilidad < 0 %}rojo{% endif %}">
-    <div class="label">Gastos</div>
-    <div class="valor">{{ fmt(gastos_total) }}</div>
+  <div class="kpi-card coral">
+    <div class="kpi-label">Gastos</div>
+    <div class="kpi-valor coral">{{ gastos_fmt }}</div>
   </div>
-  <div class="kpi {% if utilidad < 0 %}rojo{% endif %}">
-    <div class="label">Utilidad neta</div>
-    <div class="valor">{{ fmt(utilidad) }}</div>
-    {% if var_margen is not none %}
-    <div class="var {% if var_margen >= 0 %}var-pos{% else %}var-neg{% endif %}">
-      Margen {{ margen }}% ({{ '+' if var_margen >= 0 }}{{ var_margen }}pp)
-    </div>
-    {% endif %}
+  <div class="kpi-card emerald">
+    <div class="kpi-label">Utilidad neta</div>
+    <div class="kpi-valor">{{ utilidad_fmt }}</div>
+  </div>
+  <div class="kpi-card amber">
+    <div class="kpi-label">Margen</div>
+    <div class="kpi-valor amber">{{ margen }}%</div>
   </div>
 </div>
 
-{% if anomalia %}
-<div class="seccion">
-  <span class="tag-anomalia">⚠ Anomalía detectada</span>
-  <span style="margin-left:8px;color:#F4B942;">{{ anomalia.descripcion }}</span>
-</div>
-{% endif %}
-
-<div class="graficas">
-  <div class="g-barras">
-    <div class="seccion">
-      <h2>Tendencia mensual</h2>
-      <img src="data:image/png;base64,{{ grafica_barras }}" alt="Tendencia"/>
-    </div>
+<div class="section-title">Análisis visual</div>
+<div class="charts-row">
+  <div class="chart-card">
+    <div style="font-size:11px; color:#6B7A8D; margin-bottom:8px;">Ingresos vs Gastos — últimos 6 meses</div>
+    <img src="data:image/png;base64,{{ grafica_barras }}" />
   </div>
-  <div class="g-donut">
-    <div class="seccion">
-      <h2>Composición de gastos</h2>
-      <img src="data:image/png;base64,{{ grafica_donut }}" alt="Gastos"/>
-    </div>
+  <div class="chart-card">
+    <div style="font-size:11px; color:#6B7A8D; margin-bottom:8px;">Composición de gastos</div>
+    <img src="data:image/png;base64,{{ grafica_donut }}" />
   </div>
 </div>
 
 {% if categorias %}
-<div class="seccion">
-  <h2>Desglose de ingresos</h2>
+<div class="section-title">Categorías de ingreso</div>
+<div class="table-card">
   <table>
-    <tr><th>Categoría</th><th style="text-align:right">Valor</th><th style="text-align:right">%</th></tr>
-    {% for cat in categorias %}
-    <tr>
-      <td>{{ cat.nombre }}</td>
-      <td style="text-align:right">{{ fmt(cat.valor) }}</td>
-      <td style="text-align:right">
-        {{ "%.1f"|format(cat.valor / ingresos_total * 100) if ingresos_total else 0 }}%
-      </td>
-    </tr>
-    {% endfor %}
+    <thead>
+      <tr><th>Categoría</th><th>Valor</th><th>% del total</th></tr>
+    </thead>
+    <tbody>
+      {% for cat in categorias %}
+      <tr>
+        <td>{{ cat.nombre }}</td>
+        <td class="emerald">{{ cat.valor_fmt }}</td>
+        <td style="color:#6B7A8D;">{{ cat.pct }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endif %}
 
 {% if analisis %}
-<div class="seccion">
-  <h2>Análisis IA</h2>
-  <div class="analisis-bloque">{{ analisis.resumen }}</div>
-  {% if analisis.recomendacion %}
-  <div class="analisis-bloque" style="margin-top:8px;border-left:3px solid #00C896;padding-left:10px;">
-    <strong style="color:#00C896;">Recomendación:</strong> {{ analisis.recomendacion }}
+<div class="section-title">✦ Análisis con IA</div>
+<div class="ai-card">
+  <div class="ai-resumen">{{ analisis.resumen }}</div>
+  {% for alerta in analisis.alertas %}
+  <div class="alerta {{ alerta.tipo }}">{{ alerta.mensaje }}</div>
+  {% endfor %}
+  {% if analisis.recomendacion_principal %}
+  <div class="recomendacion">
+    <strong>Recomendación:</strong> {{ analisis.recomendacion_principal }}
   </div>
   {% endif %}
 </div>
 {% endif %}
 
-<div class="footer">Generado el {{ generado_en }} · FinPyme · Confidencial</div>
+<div class="footer">
+  <span>FinPyme · Dashboard financiero con IA para pymes colombianas</span>
+  <span>Generado el {{ fecha_generacion }}</span>
+</div>
+
 </body>
 </html>
 """
