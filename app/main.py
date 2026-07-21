@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.middleware.tenant import TenantMiddleware
-from app.routers import analisis, auth, empresas, periodos
+from app.routers import analisis, auth, empresas, periodos, reportes
 
 # ── CORS config ──────────────────────────────────────────────────────────────
 
@@ -71,6 +71,7 @@ app.include_router(auth.router)
 app.include_router(empresas.router)
 app.include_router(periodos.router)
 app.include_router(analisis.router)
+app.include_router(reportes.router)
 
 
 @app.get("/health", tags=["health"])
