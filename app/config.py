@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # Anthropic
     ANTHROPIC_API_KEY: str = ""
 
+    # Resend
+    RESEND_API_KEY: str = ""
+    EMAIL_FROM: str = "reportes@finpyme.app"
+
     # CORS
     ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 
