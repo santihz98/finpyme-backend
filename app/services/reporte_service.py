@@ -3,7 +3,6 @@ import io
 from datetime import datetime
 
 import matplotlib
-import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 from jinja2 import BaseLoader, Environment
 from weasyprint import HTML
@@ -50,77 +49,93 @@ class ReporteService:
 
     # ── Gráficas ──────────────────────────────────────────────────────────────
 
-    def _generar_grafica_barras(self, meses: list) -> str:
-        """Barras de ingresos vs gastos por mes. Retorna PNG en base64."""
+    def _generar_grafica_barras(self, periodos_resumen: list) -> str:
+        """Barras agrupadas de ingresos vs gastos (últimos 6 meses). Retorna PNG en base64."""
         fig, ax = plt.subplots(figsize=(8, 3))
         fig.patch.set_facecolor(self.colores["slate"])
         ax.set_facecolor(self.colores["slate"])
 
-        if meses:
-            labels = [m.get("periodo", "") for m in meses]
-            ingresos = [m.get("ingresos_total", 0) for m in meses]
-            gastos = [m.get("gastos_total", 0) for m in meses]
-            x = range(len(labels))
-            w = 0.35
-            ax.bar([i - w / 2 for i in x], ingresos, w,
-                   color=self.colores["emerald"], label="Ingresos")
-            ax.bar([i + w / 2 for i in x], gastos, w,
-                   color=self.colores["coral"], label="Gastos")
-            ax.set_xticks(list(x))
-            ax.set_xticklabels(labels, color=self.colores["pearl"], fontsize=7)
-        else:
-            ax.text(0.5, 0.5, "Sin datos de tendencia",
-                    ha="center", va="center", color=self.colores["muted"],
-                    transform=ax.transAxes)
+        datos = sorted(periodos_resumen[-6:], key=lambda x: x["periodo"])
+        meses = [self._nombre_mes_corto(d["periodo"]) for d in datos]
+        ingresos = [d["ingresos_total"] / 1_000_000 for d in datos]
+        gastos = [d["gastos_total"] / 1_000_000 for d in datos]
 
-        ax.tick_params(colors=self.colores["pearl"])
-        ax.spines[:].set_color(self.colores["muted"])
-        legend = ax.legend(facecolor=self.colores["ink"],
-                           labelcolor=self.colores["pearl"], fontsize=8)
+        x = range(len(meses))
+        width = 0.35
+
+        ax.bar([i - width / 2 for i in x], ingresos, width,
+               color=self.colores["emerald"], alpha=0.85, label="Ingresos")
+        ax.bar([i + width / 2 for i in x], gastos, width,
+               color=self.colores["coral"], alpha=0.85, label="Gastos")
+
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(meses, color=self.colores["muted"], fontsize=8)
+        ax.tick_params(colors=self.colores["muted"])
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_color(self.colores["muted"])
+        ax.spines["bottom"].set_color(self.colores["muted"])
+        ax.yaxis.set_tick_params(labelcolor=self.colores["muted"])
+        ax.set_ylabel("COP Millones", color=self.colores["muted"], fontsize=8)
+        ax.legend(facecolor=self.colores["slate"],
+                  labelcolor=self.colores["pearl"], fontsize=8)
+
         plt.tight_layout()
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor=self.colores["slate"])
-        plt.close(fig)
-        return base64.b64encode(buf.getvalue()).decode()
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format="png", facecolor=self.colores["slate"],
+                    dpi=150, bbox_inches="tight")
+        plt.close()
+        buffer.seek(0)
+        return base64.b64encode(buffer.read()).decode()
 
     def _generar_grafica_donut(self, gastos: dict) -> str:
-        """Donut de composición de gastos. Retorna PNG en base64."""
-        fig, ax = plt.subplots(figsize=(4, 4))
+        """Donut de composición de gastos con porcentajes. Retorna PNG en base64."""
+        fig, ax = plt.subplots(figsize=(4, 3))
         fig.patch.set_facecolor(self.colores["slate"])
         ax.set_facecolor(self.colores["slate"])
 
-        excluir = {"total"}
-        categorias = {k: v for k, v in gastos.items()
-                      if k not in excluir and isinstance(v, (int, float)) and v > 0}
+        categorias = ["Nómina", "Proveedores", "Arriendo", "Servicios", "Otros"]
+        valores = [
+            gastos.get("nomina", gastos.get("nomina_medica_admin", 0)),
+            gastos.get("proveedores", gastos.get("insumos_materiales", 0)),
+            gastos.get("arriendo", 0),
+            gastos.get("servicios", gastos.get("marketing_digital", 0)),
+            gastos.get("otros", 0),
+        ]
+        colores_donut = ["#378ADD", "#00C896", "#F4B942", "#A78BFA", "#6B7A8D"]
 
-        if categorias:
-            palette = [self.colores["emerald"], self.colores["amber"],
-                       self.colores["coral"], self.colores["muted"],
-                       self.colores["pearl"]]
-            colores = (palette * ((len(categorias) // len(palette)) + 1))[:len(categorias)]
-            wedges, _ = ax.pie(
-                list(categorias.values()),
-                colors=colores,
-                wedgeprops={"width": 0.5, "edgecolor": self.colores["slate"]},
-                startangle=90,
-            )
-            patches = [mpatches.Patch(color=c, label=k)
-                       for k, c in zip(categorias.keys(), colores)]
-            ax.legend(handles=patches, loc="lower center",
-                      bbox_to_anchor=(0.5, -0.15), ncol=2,
-                      facecolor=self.colores["ink"],
-                      labelcolor=self.colores["pearl"], fontsize=7)
-        else:
-            ax.text(0.5, 0.5, "Sin datos de gastos",
-                    ha="center", va="center", color=self.colores["muted"],
-                    transform=ax.transAxes)
+        wedges, texts, autotexts = ax.pie(
+            valores,
+            colors=colores_donut,
+            autopct="%1.0f%%",
+            pctdistance=0.75,
+            startangle=90,
+            wedgeprops={"width": 0.5},
+        )
+        for text in autotexts:
+            text.set_color(self.colores["pearl"])
+            text.set_fontsize(7)
 
         plt.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor=self.colores["slate"])
-        plt.close(fig)
-        return base64.b64encode(buf.getvalue()).decode()
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format="png", facecolor=self.colores["slate"],
+                    dpi=150, bbox_inches="tight")
+        plt.close()
+        buffer.seek(0)
+        return base64.b64encode(buffer.read()).decode()
+
+    # ── Helpers de fecha ─────────────────────────────────────────────────────
+
+    def _nombre_mes_corto(self, periodo: str) -> str:
+        meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                 "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+        return meses[int(periodo.split("-")[1]) - 1]
+
+    def _nombre_mes_completo(self, periodo: str) -> str:
+        meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                 "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+        año = periodo.split("-")[0]
+        return f"{meses[int(periodo.split('-')[1]) - 1]} {año}"
 
     # ── Renderizado HTML ──────────────────────────────────────────────────────
 
